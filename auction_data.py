@@ -105,7 +105,7 @@ class DataParser:
         # Start multiprocessing
         print(">> Starting concurent update...")
         for realm in self.realms.values():
-            if self.check_for_update(realm):
+            if self.check_for_update(realm) or force_update:
                 process = Process(target=self.update_realm, args=(realm, queue))
                 processes.append(process)
                 process.start()
@@ -114,14 +114,16 @@ class DataParser:
             process.join()
 
         # Deserialize data from finished worker processes
+        updated_realms = [] # Realm list for output writing
         while not queue.empty():
-            realm = self.realms[queue.get()]
+            realm = self.realms[queue.get()]  
+            # Load subprocess data
             with open(f"{TEMP_FOLDER}/{realm.slug}.pickle", 'rb') as file:
-                self.parsed_data[realm.name] = pickle.load(file)
+                self.parsed_data[realm.name] = pickle.load(file)      
             realm.update_db() # update Realm's db record
+            updated_realms.append(realm)
 
-        # TODO: add some sort of realms to update in model list, we're not rewriting the files anymore
-        self.write_output()
+        self.write_output(updated_realms)
         print("\nFinished concurent update!")
 
     def update_loop(self):
@@ -144,7 +146,7 @@ class DataParser:
                     break
                 elif time_delta < -3 and self.check_for_update(realm):
                     self.parsed_data[realm.name] = self.update_realm(realm)
-                    self.write_output() # TODO pass realm as argument or smth
+                    self.write_output([realm, ])
                     realm.update_db() # everything went well, update Realm's db record
                     break # Should this break even be here???
                 else:
@@ -158,7 +160,6 @@ class DataParser:
                 sleep_time = time.strftime("%M:%S", time.gmtime(sleep_ammount))
                 print(f"\n> Next update: {next_update.name} in {sleep_time}.")
                 time.sleep(sleep_ammount)
-
 
     def update_realm(self, realm, queue=None):
         """Fetches the latest API json dump and parses it.\n
@@ -239,14 +240,46 @@ class DataParser:
         realm.last_update = last_update
         return True # update available
 
-    def write_output(self):
+    def write_output(self, updated_realms):
         """Updates model with up to date parsed data.\n
         Serializes parsed data in memory for later use.\n
         Encodes data in Lua Table format for Multiboxer (WoW addon).
         """
-        pass
+        with open(f"{TEMP_FOLDER}/_serialized_data.pickle", 'wb') as file:
+            pickle.dump(self.parsed_data, file)
+        conn = sqlite3.connect(AUCTION_DB)
+        c = conn.cursor()
 
+        # Update auction_chunks table
+        c.execute("""CREATE TABLE IF NOT EXISTS auction_chunks (
+                chunk_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
+                realm TEXT,
+                item_id INTEGER,
+                quantity INTEGER,
+                price INTEGER,
+                stack_size INTEGER,
+                owner TEXT,
+                time_left TEXT)""")
+        for realm in updated_realms:
+            c.execute("DELETE FROM auction_chunks WHERE realm = ?", (realm.name, ))
+            for auction_chunk in self.parsed_data[realm.name]:
+                values = (realm.name,
+                          auction_chunk['item_id'], 
+                          auction_chunk['quantity'], 
+                          auction_chunk['price'],
+                          auction_chunk['stack_size'],
+                          auction_chunk['owner'],
+                          auction_chunk['time_left'],)
+                c.execute("""INSERT INTO auction_chunks
+                        (realm, item_id, quantity, price, stack_size, owner, time_left)
+                        VALUES(?, ?, ?, ?, ?, ?, ?)""",
+                        values)
+
+        conn.commit()
+        conn.close()
+        
 
 if __name__ == '__main__':
     dp = DataParser()
+    #dp.update_all()
     dp.update_loop()
