@@ -10,6 +10,8 @@ from multiprocessing import Process, Queue
 from slpp import slpp as lua
 from wowapi import WowApi as wowapi
 
+from settings import *
+
 
 class Realm:
     def __init__(self):
