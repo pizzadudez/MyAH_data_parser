@@ -119,7 +119,7 @@ class DataParser:
             realm = self.realms[queue.get()]  
             # Load subprocess data
             with open(f"{TEMP_FOLDER}/{realm.slug}.pickle", 'rb') as file:
-                self.parsed_data[realm.name] = pickle.load(file)      
+                self.parsed_data[realm.name] = pickle.load(file)
             realm.update_db() # update Realm's db record
             updated_realms.append(realm)
 

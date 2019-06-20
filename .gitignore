@@ -3,3 +3,4 @@ temp_data/
 output_files/
 dependencies/
 settings.json
+tables.py
