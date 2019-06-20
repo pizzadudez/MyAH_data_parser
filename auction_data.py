@@ -281,5 +281,5 @@ class DataParser:
 
 if __name__ == '__main__':
     dp = DataParser()
-    #dp.update_all()
-    dp.update_loop()
+    dp.update_all(force_update=True)
+    #dp.update_loop()
