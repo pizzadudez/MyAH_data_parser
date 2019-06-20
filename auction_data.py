@@ -137,11 +137,13 @@ class DataParser:
             conn.close()
 
         # Initialization starts here
-        create_output_databases()
         self.wowapi = wowapi(CLIENT_ID, CLIENT_SECRET)
-        self.parsed_data = load_last_session()
         self.realms = realm_objects_dict()
         self.items = item_objects_dict()
+        old_parsed_data = load_last_session()
+        self.auction_chunks = old_parsed_data[0]
+        self.seller_auction_chunks = old_parsed_data[1]
+        create_output_databases()
 
     def update_all(self, force_update=False):
         """Concurently update all realms with old data.\n
@@ -168,7 +170,9 @@ class DataParser:
             realm = self.realms[queue.get()]  
             # Load subprocess data
             with open(f"{TEMP_FOLDER}/{realm.slug}.pickle", 'rb') as file:
-                self.parsed_data[realm.name] = pickle.load(file)
+                parsed_data = pickle.load(file)
+                self.auction_chunks = parsed_data[0]
+                self.seller_auction_chunks = parsed_data[1]
             realm.update_db() # update Realm's db record
             updated_realms.append(realm)
 
@@ -194,7 +198,9 @@ class DataParser:
                     next_update = realm
                     break
                 elif time_delta < -3 and self.check_for_update(realm):
-                    self.parsed_data[realm.name] = self.update_realm(realm)
+                    parsed_data = self.update_realm(realm)
+                    self.auction_chunks = parsed_data[0]
+                    self.seller_auction_chunks = parsed_data[1]
                     self.write_output([realm, ])
                     realm.update_db() # everything went well, update Realm's db record
                     break # Should this break even be here???
@@ -303,14 +309,14 @@ class DataParser:
         Encodes data in Lua Table format for Multiboxer (WoW addon).
         """
         with open(f"{TEMP_FOLDER}/_serialized_data.pickle", 'wb') as file:
-            pickle.dump(self.parsed_data, file)
+            pickle.dump((self.auction_chunks, self.seller_auction_chunks), file)
         conn = sqlite3.connect(CURRENT_DATA)
         c = conn.cursor()
 
         # Update auction_chunks table with new data from updated_realms
         for realm in updated_realms:
             c.execute("DELETE FROM auction_chunks WHERE realm = ?", (realm.name, ))
-            for auction_chunk in self.parsed_data[realm.name]:
+            for auction_chunk in self.auction_chunks[realm.name]:
                 values = (realm.name,
                           auction_chunk['item_id'], 
                           auction_chunk['quantity'], 
