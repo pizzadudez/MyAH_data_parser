@@ -32,7 +32,7 @@ class Realm:
 
     def update_db(self):
         """Updates Realm instance's row"""
-        conn = sqlite3.connect(REALM_DB)
+        conn = sqlite3.connect(REALMS)
         c = conn.cursor()
         c.execute("""UPDATE realms SET last_update = ?, last_check = ?
                 WHERE name = ? AND (last_Update != ? OR last_update IS NULL)""",
@@ -66,7 +66,7 @@ class DataParser:
                 return {}
 
         def realm_objects_dict():
-            conn = sqlite3.connect(REALM_DB)
+            conn = sqlite3.connect(REALMS)
             c = conn.cursor()
             c.execute("SELECT * FROM realms")
 
@@ -77,7 +77,7 @@ class DataParser:
             return realms
 
         def item_objects_dict():
-            conn = sqlite3.connect(ITEM_DB)
+            conn = sqlite3.connect(ITEMS)
             c = conn.cursor()
             c.execute("SELECT * FROM items")
 
@@ -247,7 +247,7 @@ class DataParser:
         """
         with open(f"{TEMP_FOLDER}/_serialized_data.pickle", 'wb') as file:
             pickle.dump(self.parsed_data, file)
-        conn = sqlite3.connect(AUCTION_DB)
+        conn = sqlite3.connect(CURRENT_DATA)
         c = conn.cursor()
 
         # Update auction_chunks table

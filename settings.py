@@ -10,10 +10,13 @@ def set_setting(field):
 CLIENT_ID = set_setting('client_id')
 CLIENT_SECRET = set_setting('client_secret')
 
+# Databases
+REALMS = set_setting('realm_db')
+ITEMS = set_setting('item_db')
+CURRENT_DATA = set_setting('current_data')
+HISTORICAL_DATA = set_setting('historical_data')
+
 # Paths
-REALM_DB = set_setting('realm_db')
-ITEM_DB = set_setting('item_db')
-AUCTION_DB = set_setting('auction_db')
 TEMP_FOLDER = set_setting('temp_folder')
 LUA_PATH = set_setting('lua_path')
 
