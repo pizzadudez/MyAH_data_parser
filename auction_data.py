@@ -15,17 +15,18 @@ from settings import *
 
 class Realm:
     def __init__(self, row):
-        self.name = row[0]
-        self.slug = row[1]
-        self.code = row[2]
-        self.update_interval = row[3]
-        self.last_update = row[4]
-        self.last_check = row[5]
-        self.json_link = row[6]
-        self.seller = row[7]
-        self.region = row[8]
-        self.position = row[9]
-        self.account = row[10]
+        self.name = row[1]
+        self.slug = row[2]
+        self.code = row[3]
+        self.update_interval = row[4]
+        self.last_update = row[5]
+        self.last_check = row[6]
+        self.json_link = row[7]
+        
+        # Seller Hashmap
+        self.sellers = {}
+        for seller in row[11]:
+            self.sellers[seller] = True;
 
     def __str__(self):
         return self.name
@@ -72,7 +73,10 @@ class DataParser:
 
             realms = {}
             for row in c.fetchall():
-                realms[row[0]] = Realm(row)
+                c.execute("SELECT full_name FROM sellers WHERE realm_id = ?",
+                        (row[0], ))
+                sellers = [x[0] for x in c.fetchall()]
+                realms[row[1]] = Realm(row + (sellers, ))
             conn.close()
             return realms
 
@@ -122,7 +126,7 @@ class DataParser:
                     event TEXT,
                     quantity TEXT,
                     FOREIGN KEY (snapshot_id) REFERENCES snapshots(snapshot_id),
-                    FOREIGN KEY (chunk_id) REFERENCES cunks(chunk_id),
+                    FOREIGN KEY (chunk_id) REFERENCES chunks(chunk_id),
                     PRIMARY KEY (snapshot_id, chunk_id))""")
             c.execute("""CREATE TABLE IF NOT EXISTS auctions (
                     auc_id INTEGER NOT NULL,
@@ -232,43 +236,51 @@ class DataParser:
                     (row['auc'], row['item'], owner_and_realm, row['buyout'], row['quantity'], row['timeLeft']))
         conn.commit()
 
-        # Cluster relevant auctions based on price, stack_size, owner and time_left
+        # Cluster relevant auctions into chunks based on (price, stack_size, owner, time_left)
         auction_chunks = []
+        sellers_auction_chunks = []
         for item in self.items.values():
+            # Find all auction Chunks
             c.execute(f"""SELECT DISTINCT buyout, stack_size, owner, time_left FROM auctions
                     WHERE item_id=? AND stack_size IN {item.stack_sizes}
                     ORDER BY (buyout/stack_size) ASC""", (item.item_id, ))
-            for combo in c.fetchall():
-                buyout = combo[0]
-                stack_size = combo[1]
-                owner = combo[2]
-                time_left = combo[3]
+            # Loop through auction chunks found
+            for chunk in c.fetchall():
+                buyout = chunk[0]
+                stack_size = chunk[1]
+                owner = chunk[2]
+                time_left = chunk[3]
                 price = round(buyout / stack_size) / 10000
+
+                chunk_data = {
+                    'item_id': item.item_id,
+                    'price': price, 
+                    'stack_size': stack_size,
+                    'owner': owner, 
+                    'time_left': time_left,}
 
                 c.execute("SELECT auc_id FROM auctions WHERE item_id=? AND buyout=? AND stack_size=? AND owner=? AND time_left=?",
                         (item.item_id, buyout, stack_size, owner, time_left))
-                auc_ids = [x[0] for x in c.fetchall()]
-                quantity = len(auc_ids)
 
-                # Add cluster to list
-                cluster = {'item_id': item.item_id,
-                           'quantity': quantity,
-                           'price': price, 
-                           'stack_size': stack_size,
-                           'owner': owner, 
-                           'time_left': time_left,
-                           'auc_ids': auc_ids,}
-                auction_chunks.append(cluster)
+                # Store auc_ids only for tracked sellers
+                if realm.sellers[owner]:
+                    chunk_data['auc_ids'] = [x[0] for x in c.fetchall()]
+                    chunk_data['quantity'] = len(chunk_data['auc_ids'])
+                    sellers_auction_chunks.append(chunk_data)
+                else:
+                    chunk_data['quantity'] = len(c.fetchall())
+                auction_chunks.append(chunk_data)
 
         print(f"> Finished updating: {realm.name}")
+
+        parsed_data = (auction_chunks, sellers_auction_chunks)
         if queue:
-            # If subprocess serialize data and add realm name to queue
+            # If subprocess: serialize data and add realm name to queue
             with open(f"{TEMP_FOLDER}/{realm.slug}.pickle", 'wb') as file:
-                pickle.dump(auction_chunks, file)
+                pickle.dump(parsed_data, file)
             queue.put(realm.name)
         else:
-            # Else return list of auction_chunks
-            return auction_chunks
+            return parsed_data
 
     def check_for_update(self, realm):
         """Checks for new json dump and returns True if an update is needed.\n
@@ -316,5 +328,5 @@ class DataParser:
 
 if __name__ == '__main__':
     dp = DataParser()
-    dp.update_all(force_update=True)
+    #dp.update_all(force_update=True)
     #dp.update_loop()
