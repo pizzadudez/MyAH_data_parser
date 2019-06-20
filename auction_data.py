@@ -36,7 +36,7 @@ class Realm:
         conn = sqlite3.connect(REALMS)
         c = conn.cursor()
         c.execute("""UPDATE realms SET last_update = ?, last_check = ?
-                WHERE name = ? AND (last_Update != ? OR last_update IS NULL)""",
+                WHERE name = ? AND (last_update != ? OR last_update IS NULL)""",
                 (self.last_update, self.last_check, self.name, self.last_update))
         conn.commit()
 
@@ -64,7 +64,7 @@ class DataParser:
                 with open(f"{TEMP_FOLDER}/_serialized_data.pickle", 'rb') as old:
                     return pickle.load(old)
             except:
-                return {}
+                return ({}, {})
 
         def realm_objects_dict():
             conn = sqlite3.connect(REALMS)
@@ -103,7 +103,7 @@ class DataParser:
                 realm TEXT,
                 item_id INTEGER,
                 quantity INTEGER,
-                price INTEGER,
+                price REAL,
                 stack_size INTEGER,
                 owner TEXT,
                 time_left TEXT)""")
@@ -113,14 +113,17 @@ class DataParser:
             c = conn.cursor()
             c.execute("""CREATE TABLE IF NOT EXISTS snapshots (
                     snapshot_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
-                    realm TEXT,
-                    timestamp INTEGER)""")
+                    timestamp INTEGER,
+                    realm TEXT)""")
             c.execute("""CREATE TABLE IF NOT EXISTS chunks (
                     chunk_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
                     first_seen INTEGER,
                     item_id INTEGER,
-                    owner TEXT)""")
-            c.execute("""CREATE TABLE IF NOT EXISTS snapshot_chunks_events (
+                    owner TEXT,
+                    price REAL,
+                    stack_size INTEGER,
+                    time_left TEXT)""")
+            c.execute("""CREATE TABLE IF NOT EXISTS snapshot_chunk_events (
                     snapshot_id INTEGER,
                     chunk_id INTEGER,
                     event TEXT,
@@ -131,7 +134,7 @@ class DataParser:
             c.execute("""CREATE TABLE IF NOT EXISTS auctions (
                     auc_id INTEGER NOT NULL,
                     chunk_id INTEGER,
-                    realm TEXT,
+                    last_seen INTEGER,
                     FOREIGN KEY (chunk_id) REFERENCES chunks(chunk_id),
                     PRIMARY KEY (auc_id, chunk_id))""")
             conn.close()
@@ -171,12 +174,13 @@ class DataParser:
             # Load subprocess data
             with open(f"{TEMP_FOLDER}/{realm.slug}.pickle", 'rb') as file:
                 parsed_data = pickle.load(file)
-                self.auction_chunks = parsed_data[0]
-                self.seller_auction_chunks = parsed_data[1]
+                self.auction_chunks[realm.name] = parsed_data[0]
+                self.seller_auction_chunks[realm.name] = parsed_data[1]
             realm.update_db() # update Realm's db record
             updated_realms.append(realm)
 
         self.write_output(updated_realms)
+        self.update_historical_db(updated_realms)
         print("\nFinished concurent update!")
 
     def update_loop(self):
@@ -199,9 +203,10 @@ class DataParser:
                     break
                 elif time_delta < -3 and self.check_for_update(realm):
                     parsed_data = self.update_realm(realm)
-                    self.auction_chunks = parsed_data[0]
-                    self.seller_auction_chunks = parsed_data[1]
+                    self.auction_chunks[realm.name] = parsed_data[0]
+                    self.seller_auction_chunks[realm.name] = parsed_data[1]
                     self.write_output([realm, ])
+                    self.update_historical_db([realm, ])
                     realm.update_db() # everything went well, update Realm's db record
                     break # Should this break even be here???
                 else:
@@ -269,7 +274,7 @@ class DataParser:
                         (item.item_id, buyout, stack_size, owner, time_left))
 
                 # Store auc_ids only for tracked sellers
-                if realm.sellers[owner]:
+                if realm.sellers.get(owner, None):
                     chunk_data['auc_ids'] = [x[0] for x in c.fetchall()]
                     chunk_data['quantity'] = len(chunk_data['auc_ids'])
                     sellers_auction_chunks.append(chunk_data)
@@ -330,9 +335,55 @@ class DataParser:
                         values)
         conn.commit()
         conn.close()
+
+    def update_historical_db(self, updated_realms):
+        """Updates Historical database with data from the lastest realm snapshots."""
         
+        conn = sqlite3.connect(HISTORICAL_DATA)
+        c = conn.cursor()
+
+        for realm in updated_realms:
+            snapshot_timestamp = realm.last_update
+            c.execute("SELECT * FROM snapshots WHERE timestamp=? AND realm=?",
+                    (snapshot_timestamp, realm.name))
+            if len(c.fetchall()):
+                continue
+            c.execute("""INSERT INTO snapshots (timestamp, realm)
+                    VALUES(?, ?)""", (snapshot_timestamp, realm.name))
+            snapshot_id = c.lastrowid
+
+            for chunk in self.seller_auction_chunks[realm.name]:
+                c.execute("SELECT chunk_id FROM auctions WHERE auc_id=?", (chunk['auc_ids'][0], ))
+                chunk_id = c.fetchall()[0][0]
+                if chunk_id:
+                    for auc_id in chunk['auc_ids']:
+                        c.execute("UPDATE auctions SET last_seen=? WHERE auc_id=? AND chunk_id=?",
+                        (snapshot_timestamp, auc_id, chunk_id))
+                else:
+                    # put data in
+                    c.execute("""INSERT INTO chunks (first_seen, item_id, owner, price, stack_size, time_left)
+                            VALUES(?, ?, ?, ?, ?, ?)""",
+                            (snapshot_timestamp, 
+                             chunk['item_id'], 
+                             chunk['owner'],
+                             chunk['price'],
+                             chunk['stack_size'],
+                             chunk['time_left']))
+                    chunk_id = c.lastrowid
+                    for auc_id in chunk['auc_ids']:
+                        c.execute("""INSERT INTO auctions (auc_id, chunk_id, last_seen)
+                                VALUES(?, ?, ?)""", (auc_id, chunk_id, snapshot_timestamp))
+            
+                # Add relation between chunk and snapshot
+                c.execute("""INSERT INTO snapshot_chunk_events (snapshot_id, chunk_id)
+                        VALUES(?, ?)""", (snapshot_id, chunk_id))
+        
+        conn.commit()
+        conn.close()
+                    
 
 if __name__ == '__main__':
     dp = DataParser()
-    #dp.update_all(force_update=True)
-    #dp.update_loop()
+    #dp.update_historical_db([dp.realms['Frostmane'], ])
+    dp.update_all()
+    dp.update_loop()
