@@ -88,7 +88,52 @@ class DataParser:
                 stack_sizes = [x[0] for x in c.fetchall()]
                 items[row[1]] = Item(row + (stack_sizes, ))
             return items
+        
+        def create_output_databases():
+            """Creates output dbs tables if they don't exist."""
 
+            conn = sqlite3.connect(CURRENT_DATA)
+            c = conn.cursor()
+            c.execute("""CREATE TABLE IF NOT EXISTS auction_chunks (
+                chunk_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
+                realm TEXT,
+                item_id INTEGER,
+                quantity INTEGER,
+                price INTEGER,
+                stack_size INTEGER,
+                owner TEXT,
+                time_left TEXT)""")
+            conn.close()
+
+            conn = sqlite3.connect(HISTORICAL_DATA)
+            c = conn.cursor()
+            c.execute("""CREATE TABLE IF NOT EXISTS snapshots (
+                    snapshot_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
+                    realm TEXT,
+                    timestamp INTEGER)""")
+            c.execute("""CREATE TABLE IF NOT EXISTS chunks (
+                    chunk_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
+                    first_seen INTEGER,
+                    item_id INTEGER,
+                    owner TEXT)""")
+            c.execute("""CREATE TABLE IF NOT EXISTS snapshot_chunks_events (
+                    snapshot_id INTEGER,
+                    chunk_id INTEGER,
+                    event TEXT,
+                    quantity TEXT,
+                    FOREIGN KEY (snapshot_id) REFERENCES snapshots(snapshot_id),
+                    FOREIGN KEY (chunk_id) REFERENCES cunks(chunk_id),
+                    PRIMARY KEY (snapshot_id, chunk_id))""")
+            c.execute("""CREATE TABLE IF NOT EXISTS auctions (
+                    auc_id INTEGER NOT NULL,
+                    chunk_id INTEGER,
+                    realm TEXT,
+                    FOREIGN KEY (chunk_id) REFERENCES chunks(chunk_id),
+                    PRIMARY KEY (auc_id, chunk_id))""")
+            conn.close()
+
+        # Initialization starts here
+        create_output_databases()
         self.wowapi = wowapi(CLIENT_ID, CLIENT_SECRET)
         self.parsed_data = load_last_session()
         self.realms = realm_objects_dict()
@@ -250,16 +295,7 @@ class DataParser:
         conn = sqlite3.connect(CURRENT_DATA)
         c = conn.cursor()
 
-        # Update auction_chunks table
-        c.execute("""CREATE TABLE IF NOT EXISTS auction_chunks (
-                chunk_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
-                realm TEXT,
-                item_id INTEGER,
-                quantity INTEGER,
-                price INTEGER,
-                stack_size INTEGER,
-                owner TEXT,
-                time_left TEXT)""")
+        # Update auction_chunks table with new data from updated_realms
         for realm in updated_realms:
             c.execute("DELETE FROM auction_chunks WHERE realm = ?", (realm.name, ))
             for auction_chunk in self.parsed_data[realm.name]:
@@ -274,7 +310,6 @@ class DataParser:
                         (realm, item_id, quantity, price, stack_size, owner, time_left)
                         VALUES(?, ?, ?, ?, ?, ?, ?)""",
                         values)
-
         conn.commit()
         conn.close()
         

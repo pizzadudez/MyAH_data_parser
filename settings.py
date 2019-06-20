@@ -9,13 +9,11 @@ def set_setting(field):
 # Blizz API
 CLIENT_ID = set_setting('client_id')
 CLIENT_SECRET = set_setting('client_secret')
-
 # Databases
-REALMS = set_setting('realm_db')
-ITEMS = set_setting('item_db')
+REALMS = set_setting('realms')
+ITEMS = set_setting('items')
 CURRENT_DATA = set_setting('current_data')
 HISTORICAL_DATA = set_setting('historical_data')
-
 # Paths
 TEMP_FOLDER = set_setting('temp_folder')
 LUA_PATH = set_setting('lua_path')
