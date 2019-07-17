@@ -354,7 +354,7 @@ class DataParser:
 
             for chunk in self.seller_auction_chunks[realm.name]:
                 c.execute("SELECT chunk_id FROM auctions WHERE auc_id=?", (chunk['auc_ids'][0], ))
-                chunk_id = c.fetchall()[0][0]
+                chunk_id = c.fetchone()[0] if c.fetchone() else None
                 if chunk_id:
                     for auc_id in chunk['auc_ids']:
                         c.execute("UPDATE auctions SET last_seen=? WHERE auc_id=? AND chunk_id=?",
@@ -385,5 +385,5 @@ class DataParser:
 if __name__ == '__main__':
     dp = DataParser()
     #dp.update_historical_db([dp.realms['Frostmane'], ])
-    dp.update_all()
+    dp.update_all(True)
     dp.update_loop()
