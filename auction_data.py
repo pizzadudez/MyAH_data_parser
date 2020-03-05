@@ -105,7 +105,6 @@ class DataParser:
                 quantity INTEGER,
                 price REAL,
                 stack_size INTEGER,
-                owner TEXT,
                 time_left TEXT)""")
             conn.close()
 
@@ -119,7 +118,6 @@ class DataParser:
                     chunk_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
                     first_seen INTEGER,
                     item_id INTEGER,
-                    owner TEXT,
                     price REAL,
                     stack_size INTEGER,
                     time_left TEXT)""")
@@ -241,10 +239,10 @@ class DataParser:
                 time_left TEXT)""")
         c.execute("DELETE FROM auctions")
         for row in json_data['auctions']:
-            owner_and_realm = "-".join([row['owner'], row['ownerRealm'].replace(' ', '')])
-            c.execute("""INSERT INTO auctions (auc_id, item_id, owner, buyout, stack_size, time_left)
-                    VALUES (?, ?, ?, ?, ?, ?)""",
-                    (row['auc'], row['item'], owner_and_realm, row['buyout'], row['quantity'], row['timeLeft']))
+            # owner_and_realm = "-".join([row['owner'], row['ownerRealm'].replace(' ', '')])
+            c.execute("""INSERT INTO auctions (auc_id, item_id, buyout, stack_size, time_left)
+                    VALUES (?, ?, ?, ?, ?)""",
+                    (row['auc'], row['item'], row['buyout'], row['quantity'], row['timeLeft']))
         conn.commit()
 
         # Cluster relevant auctions into chunks based on (price, stack_size, owner, time_left)
@@ -252,29 +250,28 @@ class DataParser:
         sellers_auction_chunks = []
         for item in self.items.values():
             # Find all auction Chunks
-            c.execute(f"""SELECT DISTINCT buyout, stack_size, owner, time_left FROM auctions
-                    WHERE item_id=? AND stack_size IN {item.stack_sizes}
+            c.execute(f"""SELECT DISTINCT buyout, stack_size, time_left FROM auctions
+                    WHERE item_id=? AND stack_size >= 600
                     ORDER BY (buyout/stack_size) ASC""", (item.item_id, ))
             # Loop through auction chunks found
             for chunk in c.fetchall():
                 buyout = chunk[0]
                 stack_size = chunk[1]
-                owner = chunk[2]
-                time_left = chunk[3]
+                time_left = chunk[2]
                 price = round(buyout / stack_size) / 10000
 
                 chunk_data = {
                     'item_id': item.item_id,
                     'price': price, 
                     'stack_size': stack_size,
-                    'owner': owner, 
                     'time_left': time_left,}
 
-                c.execute("SELECT auc_id FROM auctions WHERE item_id=? AND buyout=? AND stack_size=? AND owner=? AND time_left=?",
-                        (item.item_id, buyout, stack_size, owner, time_left))
+                c.execute("SELECT auc_id FROM auctions WHERE item_id=? AND buyout=? AND stack_size=? AND time_left=?",
+                        (item.item_id, buyout, stack_size, time_left))
 
                 # Store auc_ids only for tracked sellers
-                if realm.sellers.get(owner, None):
+                # if realm.sellers.get(owner, None):
+                if 0:
                     chunk_data['auc_ids'] = [x[0] for x in c.fetchall()]
                     chunk_data['quantity'] = len(chunk_data['auc_ids'])
                     sellers_auction_chunks.append(chunk_data)
@@ -327,11 +324,10 @@ class DataParser:
                           auction_chunk['quantity'], 
                           auction_chunk['price'],
                           auction_chunk['stack_size'],
-                          auction_chunk['owner'],
                           auction_chunk['time_left'],)
                 c.execute("""INSERT INTO auction_chunks
-                        (realm, item_id, quantity, price, stack_size, owner, time_left)
-                        VALUES(?, ?, ?, ?, ?, ?, ?)""",
+                        (realm, item_id, quantity, price, stack_size, time_left)
+                        VALUES(?, ?, ?, ?, ?, ?)""",
                         values)
         conn.commit()
         conn.close()
@@ -361,11 +357,10 @@ class DataParser:
                         (snapshot_timestamp, auc_id, chunk_id))
                 else:
                     # put data in
-                    c.execute("""INSERT INTO chunks (first_seen, item_id, owner, price, stack_size, time_left)
-                            VALUES(?, ?, ?, ?, ?, ?)""",
+                    c.execute("""INSERT INTO chunks (first_seen, item_id, price, stack_size, time_left)
+                            VALUES(?, ?, ?, ?, ?)""",
                             (snapshot_timestamp, 
-                             chunk['item_id'], 
-                             chunk['owner'],
+                             chunk['item_id'],
                              chunk['price'],
                              chunk['stack_size'],
                              chunk['time_left']))
