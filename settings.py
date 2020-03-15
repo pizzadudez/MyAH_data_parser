@@ -1,10 +1,16 @@
 import json
+import os
 
-with open('settings.json') as f:
+dirname = os.path.dirname(__file__)
+SETTINGS_FILE = os.path.join(dirname, 'settings.json')
+
+with open(SETTINGS_FILE) as f:
     settings = json.load(f)
+
 
 def set_setting(field):
     return settings['settings'].get(field, None) or settings['default_settings'][field]
+
 
 # Blizz API
 CLIENT_ID = set_setting('client_id')
@@ -17,4 +23,3 @@ HISTORICAL_DATA = set_setting('historical_data')
 # Paths
 TEMP_FOLDER = set_setting('temp_folder')
 LUA_PATH = set_setting('lua_path')
-
