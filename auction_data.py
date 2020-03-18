@@ -11,6 +11,7 @@ from slpp import slpp as lua
 from wowapi import WowApi as wowapi
 
 from settings import *
+from own_auctions import OwnAuctions
 
 
 class Realm:
@@ -22,10 +23,12 @@ class Realm:
         self.last_update = row[5]
         self.last_check = row[6]
         self.json_link = row[7]
+        self.url = f'data/wow/connected-realm/{row[11]}/auctions' + \
+            '?namespace=dynamic-eu&locale=en_GB'
 
         # Seller Hashmap
         self.sellers = {}
-        for seller in row[11]:
+        for seller in row[12]:
             self.sellers[seller] = True
 
     def __str__(self):
@@ -147,6 +150,8 @@ class DataParser:
         self.auction_chunks = old_parsed_data[0]
         self.seller_auction_chunks = old_parsed_data[1]
         create_output_databases()
+        # Own auction ids (8.3 api changes)
+        self.own_auctions_hash_table = OwnAuctions().ids
 
     def update_all(self, force_update=False):
         """Concurently update all realms with old data.\n
@@ -159,7 +164,7 @@ class DataParser:
         # Start multiprocessing
         print(">> Starting concurent update...")
         for realm in self.realms.values():
-            if self.check_for_update(realm) or force_update:
+            if force_update or self.check_for_update(realm):
                 process = Process(target=self.update_realm,
                                   args=(realm, queue))
                 processes.append(process)
@@ -230,27 +235,92 @@ class DataParser:
         print(f"{realm.name} updating...")
         conn = sqlite3.connect(f"{TEMP_FOLDER}/{realm.slug}.sqlite3")
         c = conn.cursor()
-        # TODO: catch errors here
         try:
-            res = self.wowapi.get_data_resource(realm.json_link, 'eu')
+            res = self.wowapi.get_resource(realm.url, 'eu')
             auctions = res['auctions']
         except ConnectionResetError as err:
             print(err)
 
         # Create or truncate table then dump json content in it
         c.execute("""CREATE TABLE IF NOT EXISTS auctions (
-                auc_id INTEGER,
-                item_id INTEGER,
-                owner TEXT,
-                buyout INTEGER,
-                stack_size INTEGER,
-                time_left TEXT)""")
+            id INTEGER,
+            item_id INTEGER,
+            quantity INTEGER,
+            unit_price INTEGER,
+            time_left TEXT)""")
         c.execute("DELETE FROM auctions")
-        for row in auctions:
+
+        parsed_auctions = []
+        for auc in auctions:
+            if auc['item']['id'] == 168487:
+                # add to pickle data
+                parsed_auctions.append({
+                    'id': auc['id'],
+                    'item_id': auc['item']['id'],
+                    'quantity': auc['quantity'],
+                    'price': auc['unit_price'] / 10000,
+                    'time_left': auc['time_left']
+                })
+                # Insert into db
+                values = (auc['id'], auc['item']['id'], auc['quantity'],
+                          auc['unit_price'], auc['time_left'])
+                c.execute("""INSERT INTO auctions (id, item_id, quantity, unit_price, time_left)
+                VALUES(?, ?, ?, ?, ?)""", values)
+        conn.commit()
+
+        print(f"> Finished updating: {realm.name}")
+
+        sorted_auctions = sorted(
+            parsed_auctions, key=lambda x: (x['price'], -x['id']))
+        parsed_data = (sorted_auctions, [])
+        if queue:
+            # If subprocess: serialize data and add realm name to queue
+            with open(f"{TEMP_FOLDER}/{realm.slug}.pickle", 'wb') as file:
+                pickle.dump(parsed_data, file)
+            queue.put(realm.name)
+        else:
+            return parsed_data
+
+    def __update_realm_old(self, realm, queue=None):
+        """Fetches the latest API json dump and parses it.\n
+        Multiprocessing Queue is None by default.
+        """
+        print(f"{realm.name} updating...")
+        conn = sqlite3.connect(f"{TEMP_FOLDER}/{realm.slug}.sqlite3")
+        c = conn.cursor()
+        # TODO: catch errors here
+        try:
+            res = self.wowapi.get_resource(realm.url, 'eu')
+            auctions = res['auctions']
+        except ConnectionResetError as err:
+            print(err)
+
+        # Create or truncate table then dump json content in it
+        c.execute('DROP TABLE IF EXISTS auctions')
+        c.execute("""CREATE TABLE IF NOT EXISTS auctions (
+            id INTEGER,
+            item_id INTEGER,
+            quantity INTEGER,
+            unit_price INTEGER,
+            time_left TEXT)""")
+        # c.execute("""CREATE TABLE IF NOT EXISTS auctions (
+        #         auc_id INTEGER,
+        #         item_id INTEGER,
+        #         owner TEXT,
+        #         buyout INTEGER,
+        #         stack_size INTEGER,
+        #         time_left TEXT)""")
+        c.execute("DELETE FROM auctions")
+        for auc in auctions:
+            if auc['item']['id'] == 168487:
+                values = (auc['id'], auc['item']['id'], auc['quantity'],
+                          auc['unit_price'], auc['time_left'])
+                c.execute("""INSERT INTO auctions (id, item_id, quantity, unit_price, time_left)
+                VALUES(?, ?, ?, ?, ?)""", values)
             # owner_and_realm = "-".join([row['owner'], row['ownerRealm'].replace(' ', '')])
-            c.execute("""INSERT INTO auctions (auc_id, item_id, buyout, stack_size, time_left)
-                    VALUES (?, ?, ?, ?, ?)""",
-                      (row['auc'], row['item'], row['buyout'], row['quantity'], row['timeLeft']))
+            # c.execute("""INSERT INTO auctions (auc_id, item_id, buyout, stack_size, time_left)
+            #         VALUES (?, ?, ?, ?, ?)""",
+            #           (row['auc'], row['item'], row['buyout'], row['quantity'], row['timeLeft']))
         conn.commit()
 
         # Cluster relevant auctions into chunks based on (price, stack_size, owner, time_left)
@@ -330,17 +400,32 @@ class DataParser:
         for realm in updated_realms:
             c.execute("DELETE FROM auction_chunks WHERE realm = ?",
                       (realm.name, ))
-            for auction_chunk in self.auction_chunks[realm.name]:
+            # concatenate auctions with same price (except own auctions)
+            auctions = self.auction_chunks[realm.name]
+            concatenated_auctions = []
+            for i in range(0, len(auctions)):
+                auc = auctions[i]
+                auc['own'] = 1 if self.own_auctions_hash_table.get(
+                    realm.name, {}).get(auc['id'], None) else 0
+                if (i == 0
+                        or auc['price'] != concatenated_auctions[-1]['price']
+                        or auc['own'] != concatenated_auctions[-1]['own']):
+                    concatenated_auctions.append(auc)
+                else:
+                    concatenated_auctions[-1]['quantity'] = concatenated_auctions[-1]['quantity'] + auc['quantity']
+
+            for auc in concatenated_auctions:
                 values = (realm.name,
-                          auction_chunk['item_id'],
-                          auction_chunk['quantity'],
-                          auction_chunk['price'],
-                          auction_chunk['stack_size'],
-                          auction_chunk['time_left'],)
+                          auc['item_id'],
+                          1,
+                          auc['price'],
+                          auc['quantity'],
+                          auc['time_left'],
+                          auc['own']
+                          )
                 c.execute("""INSERT INTO auction_chunks
-                        (realm, item_id, quantity, price, stack_size, time_left)
-                        VALUES(?, ?, ?, ?, ?, ?)""",
-                          values)
+                        (realm, item_id, quantity, price, stack_size, time_left, own)
+                        VALUES(?, ?, ?, ?, ?, ?, ?)""", values)
         conn.commit()
         conn.close()
 
@@ -394,4 +479,4 @@ if __name__ == '__main__':
     dp = DataParser()
     # dp.update_historical_db([dp.realms['Frostmane'], ])
     dp.update_all(True)
-    dp.update_loop()
+    # dp.update_loop()
