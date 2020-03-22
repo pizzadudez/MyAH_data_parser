@@ -253,6 +253,9 @@ class DataParser:
         parsed_auctions = []
         for auc in auctions:
             if auc['item']['id'] == 168487:
+                # ignore auctions meant to just push up the mean price
+                if (auc['unit_price'] / 10000 > 300):
+                    continue
                 # add to pickle data
                 parsed_auctions.append({
                     'id': auc['id'],
